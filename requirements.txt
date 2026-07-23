@@ -1,0 +1,7 @@
+openai>=1.0.0
+requests
+Pillow>=10.0.0
+playwright
+pyyaml
+imagehash
+python-dotenv
