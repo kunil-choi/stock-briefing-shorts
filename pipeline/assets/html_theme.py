@@ -73,10 +73,13 @@ def background_layer(image_path, darkness: float = 0.72, credit: str = "") -> st
 
 
 def text_plate(inner_html: str, extra_style: str = "") -> str:
-    """사진 위에서도 항상 읽히는 반투명 다크 판."""
+    """사진 위에서도 항상 읽히는 반투명 다크 판. max-width 기본값(900px)을
+    둬서 긴 제목이 캔버스(1080px) 폭을 넘어가거나 예측 불가능한 지점에서
+    줄바꿈되지 않게 한다 — extra_style에서 값을 다시 넘기면 덮어써진다
+    (같은 style 속성 안에서는 나중에 오는 선언이 우선하므로)."""
     return (
         f'<div style="display:inline-block;background:rgba(5,7,13,.55);'
-        f'border-radius:22px;padding:26px 32px;{extra_style}">{inner_html}</div>'
+        f'border-radius:22px;padding:26px 32px;max-width:900px;{extra_style}">{inner_html}</div>'
     )
 
 
@@ -92,6 +95,11 @@ body{{
   font-family:'Noto Sans KR','NanumGothic','Malgun Gothic',sans-serif;
   color:{PALETTE['ink']};
   background:{PALETTE['bg']};
+  /* 한글은 기본적으로 음절 단위 어디서나 줄바꿈이 허용돼("관심종목"이
+     "관심"/"종목"으로 쪼개지는 등) 단어 중간이 잘리는 문제가 있었다.
+     keep-all로 한글 단어 단위를 유지한 채(공백/구두점에서만) 줄바꿈한다. */
+  word-break:keep-all;
+  overflow-wrap:break-word;
   position:relative;
 }}
 .stage{{position:absolute; left:0; top:0; width:{W}px; height:{H}px;}}
