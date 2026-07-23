@@ -1,0 +1,22 @@
+# 환경변수 및 인증 파일
+.env
+token.json
+client_secret.json
+credentials.json
+
+# 결과물
+*.mp4
+*.mp3
+*.wav
+
+# 위 *.mp3 규칙의 예외: 방송에 쓰이는 고정 배경음악 에셋(생성물이 아님)
+!assets/music/*.mp3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
