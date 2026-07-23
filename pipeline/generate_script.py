@@ -10,8 +10,13 @@ STEP-1 본편을 재분석하지 않고, STEP-1과 같은 원본 데이터
 채널 역할.
 
 - 데이터 소스: stock-briefing-v3-1의 data/briefing_data.json
-  (raw.githubusercontent.com) — STEP-1 본편과 동일 원본
-- 랭킹: pipeline/assets/ranking.py(뉴스·방송 언급 + 증권사 언급 2팩터)
+  (raw.githubusercontent.com) — STEP-1 본편과 동일 원본. 실제 스키마는
+  {"market_leaders": [...], "stocks": [...], ...}이며(STEP-1의 후처리된
+  script.json과 달리 "sections" 구조가 아님), 각 종목 항목에 v3-1이 이미
+  계산해둔 weighted_score(채널별 언급 가중합산)가 들어있다.
+- 랭킹: pipeline/assets/ranking.py — market_leaders + stocks를 합쳐
+  weighted_score 내림차순 TOP3을 뽑는다(자체 재계산 없이 v3-1 산출값을
+  그대로 신뢰).
 - 목표 길이: 45~60초 고정
 - 오프닝: 카운트다운 훅(고정 템플릿) → 3위 → 2위 → 1위 → 클로징(CTA)
 """
@@ -75,7 +80,8 @@ _SYSTEM_PROMPT = """
 너는 KBS 머니올라 "관심종목 쇼츠" 대본 작성 전문가입니다. 45~60초 세로형
 쇼츠 영상에 들어갈, 오늘 가장 많이 언급된 관심종목 3개 각각에 대한 짧고
 임팩트 있는 한 줄 코멘트를 작성하세요. 제공된 요약(summary)·투자포인트
-(catalysts) 데이터 안에서만 작성하고, 없는 사실을 지어내지 마세요. 특정
+(catalyst)·언급 채널(mentions) 데이터 안에서만 작성하고, 없는 사실을
+지어내지 마세요. 특정
 종목의 매수·매도를 권유하는 어조는 쓰지 마세요 — "왜 오늘 화제였는지"를
 전달하는 역할만 합니다.
 
@@ -109,7 +115,8 @@ def _mock_response(candidates: list) -> dict:
 def _call_stocks(candidates: list) -> dict:
     system_prompt = _SYSTEM_PROMPT.format(rules=_RULES)
     user_content = json.dumps(
-        [{"name": c["name"], "sector": c["sector"], "summary": c["summary"], "catalysts": c["catalysts"]}
+        [{"name": c["name"], "summary": c["summary"], "catalyst": c["catalyst"],
+          "mentions": c.get("channel_counts", {})}
          for c in candidates],
         ensure_ascii=False, indent=2,
     )
@@ -144,10 +151,10 @@ def generate_shorts_script(briefing_data: dict) -> dict:
         print("❌ 랭킹에 포함할 관심종목 후보가 없습니다(언급 데이터 부족). 종료합니다.")
         sys.exit(1)
 
-    print("🏆 관심종목 TOP3 (언급 점수 기준):")
+    print("🏆 관심종목 TOP3 (v3-1 weighted_score 기준):")
     for c in candidates:
-        print(f"  {c['rank']}위 {c['name']} — ranking_score={c['ranking_score']} "
-              f"(뉴스/방송 {c['news_score']} / 증권사 {c['report_score']})")
+        print(f"  {c['rank']}위 {c['name']} — weighted_score={c['weighted_score']} "
+              f"(총 언급 {c['total_count']}건, {c.get('channel_counts', {})})")
 
     llm_result = _call_stocks(candidates)
     narration_by_name = {s["name"]: s for s in llm_result.get("stocks", [])}
