@@ -24,12 +24,14 @@ STEP-1은 본편 제작 과정에서 개체명 추출·미디어 검색·서사 
 
 ## 랭킹 산식
 
-`pipeline/assets/ranking.py`가 `stock-briefing-step1`의 "주도주 랭킹형"
-(Phase F) `compute_ranking_score()` 산식을 이식했다. 다만 거래량 점수
-(pykrx OHLCV 재조회 필요)는 뺐다 — 이 가벼운 쇼츠 전용 레포에 무거운 시세
-조회 의존성을 새로 들이는 비용 대비, "관심종목 쇼츠"의 취지 자체가 거래량이
-아니라 "얼마나 많이 언급됐는가"이므로 뉴스/방송 언급 점수(0.6) + 증권사
-언급 점수(0.4) 2팩터만으로 목적에 부합한다고 판단했다.
+v3-1의 `briefing_data.json`은 STEP-1의 후처리된 `script.json`과 스키마가
+다르다 — `{"market_leaders": [...], "stocks": [...], ...}` 구조이며, 각
+종목 항목에 v3-1이 이미 채널별(뉴스/경제방송/유튜브) 언급을 가중합산해
+계산해둔 `weighted_score`가 들어있다. `pipeline/assets/ranking.py`는 이
+값을 자체 재계산하지 않고, `market_leaders`(대형 주도주) + `stocks`(관심
+종목) 두 배열을 합쳐 `weighted_score` 내림차순 TOP3을 그대로 뽑는다 —
+v3-1이 이미 반영한 채널별 가중치·중복 보정 로직과 어긋나는 걸 피하기
+위함이다.
 
 ## 세로형(9:16) 레이아웃
 
@@ -106,4 +108,4 @@ python pipeline/quality_gate.py KO
 
 - `stock-briefing-v3-1`의 cron 뒤에 자동 dispatch 연결(현재는 수동 실행만)
 - STEP-1 본편으로 연결되는 링크를 설명란/최종 카드에 더 적극적으로 노출
-- 트래픽 데이터가 쌓이면 랭킹 산식(뉴스/증권사 가중치)을 조정
+- 트래픽 데이터가 쌓이면 market_leaders/stocks 가중치나 top_n을 조정

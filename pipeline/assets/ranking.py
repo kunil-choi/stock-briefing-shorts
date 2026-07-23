@@ -1,101 +1,87 @@
 # pipeline/assets/ranking.py
 """
-관심종목 TOP3 선정 — stock-briefing-step1의 "주도주 랭킹형"(Phase F)
-compute_ranking_score() 산식을 이식하되, 거래량 점수(volume_score,
-pykrx OHLCV 조회 필요)는 뺐다. 이 레포는 v3-1의 briefing_data.json(원본
-수집 데이터, LLM 스크립트 생성 전)을 직접 소비하는데, 거래량은 이미 v3-1이
-아니라 시세 API 재조회가 필요해 이 가벼운 쇼츠 전용 레포에 pykrx 의존성을
-새로 들이는 비용이 크다. "관심종목 쇼츠"의 취지 자체가 "얼마나 많이
-언급됐는가"이므로, 뉴스/방송 언급 점수 + 증권사 언급 점수 2팩터만으로도
-목적에 부합한다.
+관심종목 TOP3 선정.
+
+★ 스키마 수정 이력: 최초 구현 시 v3-1의 briefing_data.json이 STEP-1의 후처리된
+script.json과 같은 "sections"(id="stock_*") 구조일 것으로 가정하고 뉴스/증권사
+언급 점수를 자체 계산했는데, 실제 라이브 v3-1 데이터로 검증해보니 완전히 다른
+스키마였다(원본 수집 데이터는 LLM 가공 전이라 "sections"가 아예 없음):
+
+  {
+    "market_leaders": [{"rank", "name", "code", "weighted_score", "total_count",
+                         "price", "change_pct", "summary", "catalyst", "risk",
+                         "channel_mentions": [...], "channel_counts": {...}}, ...],
+    "stocks": [... 위와 동일한 필드 ...],
+    ...
+  }
+
+market_leaders(대형 주도주, 현재 통상 1~2개)와 stocks(관심종목, 통상 5~10개)가
+분리돼 있고, 각 항목에 이미 v3-1이 계산해둔 weighted_score(뉴스/경제방송/유튜브
+언급을 가중합산한 점수)가 있다. 이 레포가 "얼마나 많이 언급됐는가"를 자체
+재계산할 필요가 없다 — v3-1의 weighted_score를 그대로 신뢰해 두 배열을 합쳐
+정렬하면 된다(자체 산식을 재구현하면 v3-1이 이미 반영한 채널별 가중치·중복
+보정 로직과 어긋날 위험만 생긴다).
 """
 from typing import Optional
 
-DEFAULT_WEIGHTS = (0.6, 0.4)  # (news, report)
 
-_AGGREGATE_STOCK_IDS = {"stock_추가관심종목", "stock_오늘의픽", "stock_증권사리포트"}
-_NEWS_CHANNEL_TYPES = {"유튜브", "경제방송"}
-
-
-def is_stock_candidate(section_id: str) -> bool:
-    if section_id in _AGGREGATE_STOCK_IDS:
-        return False
-    return section_id.startswith("stock_") or section_id.startswith("hidden_")
+def _fmt_price(price) -> str:
+    if price is None or price == "":
+        return ""
+    try:
+        return f"{int(price):,}"
+    except (TypeError, ValueError):
+        return str(price)
 
 
-def compute_news_score(section: dict) -> float:
-    """channel_summaries 중 유튜브/경제방송 카테고리 등장 개수 + 출처 수를
-    0~1로 정규화한다(stock-briefing-step1의 ranking.py와 동일 산식)."""
-    summaries = section.get("channel_summaries") or []
-    hit = 0
-    total_sources = 0
-    for cs in summaries:
-        if cs.get("channel_type") in _NEWS_CHANNEL_TYPES:
-            hit += 1
-            total_sources += len(cs.get("sources") or [])
-    if hit == 0:
-        return 0.0
-    score = 0.3 * hit + 0.1 * min(total_sources, 4)
-    return max(0.0, min(1.0, score))
+def _fmt_change(change_pct) -> tuple:
+    """(표시용 문자열, 상승여부) 반환. change_pct는 숫자(예: 1.91, -0.17)."""
+    if change_pct is None or change_pct == "":
+        return "", True
+    try:
+        val = float(change_pct)
+    except (TypeError, ValueError):
+        return "", True
+    sign = "+" if val >= 0 else ""
+    return f"{sign}{val:.2f}%", val >= 0
 
 
-def compute_report_score(section: dict) -> float:
-    """channel_summaries 중 증권사 카테고리의 출처(증권사) 수를 0~1로 정규화한다."""
-    summaries = section.get("channel_summaries") or []
-    for cs in summaries:
-        if cs.get("channel_type") == "증권사":
-            n = len(cs.get("sources") or [])
-            return max(0.0, min(1.0, 0.4 + 0.2 * n))
-    return 0.0
+def build_ranking(briefing_data: dict, top_n: int = 3) -> list:
+    """v3-1 briefing_data.json의 market_leaders + stocks를 합쳐
+    weighted_score 내림차순 상위 top_n개를 반환한다."""
+    pool = list(briefing_data.get("market_leaders") or []) + list(briefing_data.get("stocks") or [])
 
-
-def compute_ranking_score(news_score: float, report_score: float,
-                           weights: tuple = DEFAULT_WEIGHTS) -> float:
-    wn, wr = weights
-    return round(wn * news_score + wr * report_score, 4)
-
-
-def build_ranking(briefing_data: dict, top_n: int = 3,
-                   weights: tuple = DEFAULT_WEIGHTS) -> list:
-    """v3-1 briefing_data.json(원본 sections 구조, script.json과 동일 스키마)에서
-    종목 후보를 뽑아 ranking_score 상위 top_n개를 반환한다."""
-    from .config import normalize_stock_name, STOCK_CODES, get_stock_sector
-
-    sections = briefing_data.get("sections") or []
     candidates = []
-    for sec in sections:
-        sid = sec.get("id", "")
-        if not is_stock_candidate(sid):
+    for item in pool:
+        name = (item.get("name") or "").strip()
+        if not name:
             continue
-        name = sid.replace("stock_", "").replace("hidden_", "")
-        normalized = normalize_stock_name(name)
-
-        news_score = compute_news_score(sec)
-        report_score = compute_report_score(sec)
-        ranking_score = compute_ranking_score(news_score, report_score, weights)
-
+        change_str, positive = _fmt_change(item.get("change_pct"))
         candidates.append({
-            "rank": 0,  # 정렬 후 채움
-            "id": sid,
-            "name": normalized,
-            "code": STOCK_CODES.get(normalized, ""),
-            "sector": get_stock_sector(normalized),
-            "price": sec.get("price", ""),
-            "change": sec.get("change", ""),
-            "change_positive": sec.get("change_positive", True),
-            "news_score": round(news_score, 3),
-            "report_score": round(report_score, 3),
-            "ranking_score": ranking_score,
-            "summary": sec.get("summary", ""),
-            "catalysts": sec.get("catalysts", []),
+            "name": name,
+            "code": item.get("code", ""),
+            "price": _fmt_price(item.get("price")),
+            "change": change_str,
+            "change_positive": positive,
+            "weighted_score": item.get("weighted_score", 0) or 0,
+            "total_count": item.get("total_count", 0) or 0,
+            "summary": item.get("summary", ""),
+            "catalyst": item.get("catalyst", ""),
+            "risk": item.get("risk", ""),
+            "channel_counts": item.get("channel_counts", {}),
         })
 
-    candidates.sort(key=lambda c: c["ranking_score"], reverse=True)
-    top = candidates[:top_n]
-    # rank는 랭킹 순위 그대로(1위가 rank=1) 부여한다. 영상에서의 등장 순서
-    # (카운트다운 3위→2위→1위)는 generate_script.py가 이 리스트를 reversed로
-    # 순회해서 정한다.
+    # 같은 종목이 market_leaders/stocks 양쪽에 중복 등장하는 경우는 없다는 게
+    # v3-1의 설계 전제지만(대형 주도주 vs 그 외 관심종목으로 이미 배타적으로
+    # 분리), 방어적으로 이름 기준 중복을 제거하고 더 높은 점수를 유지한다.
+    dedup = {}
+    for c in candidates:
+        prev = dedup.get(c["name"])
+        if prev is None or c["weighted_score"] > prev["weighted_score"]:
+            dedup[c["name"]] = c
+
+    ranked = sorted(dedup.values(), key=lambda c: c["weighted_score"], reverse=True)
+    top = ranked[:top_n]
     for i, c in enumerate(top, 1):
         c["rank"] = i
-
     return top
